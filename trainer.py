@@ -111,7 +111,7 @@ class Trainer(object):
         best_accuracy = -1
         min_dev_loss = 987654321
         
-        for outer_epoch in range(self.config.epochs):
+        for outer_epoch in range(self.config.outer_epochs):
             # pseudo-labeling
             new_dataset = self.pseudo_labeling(unlabeled_dataset, confidence_threshold)
             
@@ -123,7 +123,7 @@ class Trainer(object):
             
             
             # retrain model with labeled data + pseudo-labeled data
-            for inner_epoch in range(self.config.epochs):
+            for inner_epoch in range(self.config.inner_epochs):
                 print('outer_epoch {} inner_epoch {}'.format(outer_epoch, inner_epoch))
                 self.train_epoch(inner_epoch)
                 dev_loss, dev_acc = self.evaluator.evaluate(self.model, self.valid_loader)
