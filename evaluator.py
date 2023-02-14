@@ -49,15 +49,15 @@ class Evaluator(object):
                 nb_eval_steps += 1
                 nb_eval_examples += targets.size(0)
                 
-                if _ % 1000 == 0:
-                    loss_step = eval_loss / nb_eval_steps
-                    accu_step = (n_correct*100)/nb_eval_examples
-                    if is_test == True:
-                        print(f"Test Loss per 1000 steps: {loss_step}")
-                        print(f"Test Accuracy per 1000 steps: {accu_step}")
-                    else:
-                        print(f"Validation Loss per 1000 steps: {loss_step}")
-                        print(f"Validation Accuracy per 1000 steps: {accu_step}")
+                # if _ % 1000 == 0:
+                #     loss_step = eval_loss / nb_eval_steps
+                #     accu_step = (n_correct*100)/nb_eval_examples
+                #     if is_test == True:
+                #         print(f"Test Loss per 1000 steps: {loss_step}")
+                #         print(f"Test Accuracy per 1000 steps: {accu_step}")
+                #     else:
+                #         print(f"Validation Loss per 1000 steps: {loss_step}")
+                #         print(f"Validation Accuracy per 1000 steps: {accu_step}")
             
         epoch_loss = eval_loss / nb_eval_steps
         epoch_accu = (n_correct*100) / nb_eval_examples
