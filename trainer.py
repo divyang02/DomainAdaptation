@@ -5,6 +5,7 @@ from torch.utils.data import  DataLoader
 from util.early_stopping import EarlyStopping
 from transformers import BertTokenizer, BertForSequenceClassification
 from util.dataset import Dataset
+from tqdm import tqdm
 
 class Trainer(object):
     def __init__(self, config, model, criterion, optimizer, save_path, dev_dataset, test_dataset):
@@ -51,7 +52,7 @@ class Trainer(object):
         self.model.train()
         print('train_epoch', epoch)
         
-        for _, batch in enumerate(self.train_loader):
+        for _, batch in tqdm(enumerate(self.train_loader)):
             ids = batch['input_ids'].to(self.device, dtype=torch.long)
             attention_mask = batch['attention_mask'].to(self.device, dtype=torch.long)
             token_type_ids = batch['token_type_ids'].to(self.device, dtype=torch.long)
