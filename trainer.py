@@ -97,6 +97,7 @@ class Trainer(object):
             
             if dev_loss < min_dev_loss:
                 min_dev_loss = dev_loss
+                print("Saving..")
                 torch.save({'model_state_dict':self.model.state_dict(),
                             'optimizer_state_dict':self.optimizer.state_dict(),'epoch':epoch}, self.sup_path +'/checkpoint.pt')
                 
@@ -108,7 +109,7 @@ class Trainer(object):
                 break
 
                 
-    def self_train(self, labeled_dataset, unlabeled_dataset, confidence_threshold=0.9):
+    def self_train(self, labeled_dataset, unlabeled_dataset, confidence_threshold=0.8):
         best_accuracy = -1
         min_dev_loss = 987654321
         
@@ -132,6 +133,7 @@ class Trainer(object):
                 
                 if dev_loss < min_dev_loss:
                     min_dev_loss = dev_loss
+                    print("Saving..")
                     torch.save({'model_state_dict':self.model.state_dict(),
                                 'optimizer_state_dict':self.optimizer.state_dict(), 'epoch':inner_epoch}, self.ssl_path +'/checkpoint.pt')
                 
@@ -153,7 +155,8 @@ class Trainer(object):
         new_dataset = {label:[] for label in range(self.config.class_num)}
         
         with torch.no_grad():
-            for _, batch in enumerate(unlabeled_loader):
+            print("Starting pseudo labeling")
+            for _, batch in tqdm(enumerate(unlabeled_loader)):
                 ids = batch['input_ids'].to(self.device, dtype=torch.long)
                 attention_mask = batch['attention_mask'].to(self.device, dtype=torch.long)
                 token_type_ids = batch['token_type_ids'].to(self.device, dtype=torch.long)
@@ -188,7 +191,7 @@ class Trainer(object):
                 correct+=1
             total+=1
             
-        print(' pseduo-label {}/{}'.format(correct, total))
+        print(' pseduo-label {}'.format(total))
         return balanced_dataset
 
     

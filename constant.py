@@ -1,7 +1,7 @@
 import torch
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 learning_rate = 2e-5
-epochs = 10
+epochs = 5
 outer_epochs = 10
 inner_epochs = 3
 train_batch_size = 16
