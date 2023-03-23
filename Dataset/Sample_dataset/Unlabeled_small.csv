@@ -1,7 +1,0 @@
-comments,Token_num
-"yes, team has converted all the testcases mentioned in the testplan.",11
-"all tests are passed and your team convert all cases discussed in test plain into automated tests, which is good.",20
-the images show that the tests have been completed. the list of changes are show that what files the team has modified.,22
-"the wiki is pretty clear. their project is to refactoring the questionnaire_controller.rb. and there could be three kinds of tasks. refactor the create method by dividing it to several methods;reactor update_quiz, save_choices method by moving conditions to subclasses;and rename some old style method to newest ones.",49
-"good: updated wiki page is very clear. for example: .giving background about how microdata works with a student example. . giving different ways in which users can check whether the build is successful. suggestion: ""building on the cloud"" didn't succeed for me. its giving error invitation is required in order to sign in.",53
-the write up contains clear explanation to what the issue was and how it is solved. but there was no mention of design patterns of principles in the writeup.,29
