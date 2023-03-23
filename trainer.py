@@ -131,7 +131,9 @@ class Trainer(object):
             self.train_loader = DataLoader(labeled_dataset, **self.config.train_params)
             self.early_stopping = EarlyStopping(patience=3, verbose=True)
             
-            
+            #TODO:
+            #We can do "del self.model" then initialize self.model = LARGER_BERT and so on
+
             # retrain model with labeled data + pseudo-labeled data
             for inner_epoch in range(self.config.epochs):
                 print('outer_epoch {} inner_epoch {}'.format(outer_epoch, inner_epoch))
