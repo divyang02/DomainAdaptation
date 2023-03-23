@@ -5,15 +5,17 @@ from torch.utils.data import  DataLoader
 from util.early_stopping import EarlyStopping
 from transformers import BertTokenizer, BertForSequenceClassification
 from util.dataset import Dataset
-from tqdm import tqdm
+from util.criterion import kd_loss
+
 
 class Trainer(object):
-    def __init__(self, config, model, criterion, optimizer, save_path, dev_dataset, test_dataset):
+    def __init__(self, config, model, optimizer, save_path, dev_dataset, test_dataset):
         self.config = config
-        self.loss = criterion
-        self.evaluator = Evaluator(loss=self.loss, batch_size=self.config.test_batch_size)
         self.optimizer = optimizer
         self.device = self.config.device
+
+        # self.loss = criterion.to(self.device)
+        self.evaluator = Evaluator(batch_size=self.config.test_batch_size, alpha=self.config.kd_alpha, temp=self.config.Temp)
         self.model = model.to(self.device)
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
@@ -52,21 +54,23 @@ class Trainer(object):
         self.model.train()
         print('train_epoch', epoch)
         
-        for _, batch in tqdm(enumerate(self.train_loader)):
+        for _, batch in enumerate(self.train_loader):
             ids = batch['input_ids'].to(self.device, dtype=torch.long)
             attention_mask = batch['attention_mask'].to(self.device, dtype=torch.long)
             token_type_ids = batch['token_type_ids'].to(self.device, dtype=torch.long)
-            targets = batch['labels'].to(self.device, dtype=torch.long)
-            
-            outputs = self.model(ids, attention_mask, token_type_ids, labels=targets)
-            loss, logits = outputs[0], outputs[1]
+            # targets = batch['labels'].to(self.device, dtype=torch.long)
+            targets = batch['labels'].to(self.device, dtype=torch.float)
+            outputs = self.model(ids, attention_mask, token_type_ids)
+            loss = kd_loss(outputs,targets,self.config.kd_alpha,self.config.Temp)
+            # loss, logits = outputs[0], outputs[1]
             
             tr_loss += loss.item()
-            scores = torch.softmax(logits, dim=-1)
+            scores = torch.softmax(outputs.data, dim=-1)
             big_val, big_idx = torch.max(scores.data, dim=-1)
-            n_correct += self.calculate_accu(big_idx,targets)
+            _,big_idx_target = torch.max(targets.data,dim=-1)
+            n_correct += self.calculate_accu(big_idx,big_idx_target)
             nb_tr_steps += 1
-            nb_tr_examples += targets.size(0)
+            nb_tr_examples += big_idx_target.size(0)
             
             # if _ % 1000 == 0:
             #     loss_step = tr_loss/nb_tr_steps
@@ -97,7 +101,6 @@ class Trainer(object):
             
             if dev_loss < min_dev_loss:
                 min_dev_loss = dev_loss
-                print("Saving..")
                 torch.save({'model_state_dict':self.model.state_dict(),
                             'optimizer_state_dict':self.optimizer.state_dict(),'epoch':epoch}, self.sup_path +'/checkpoint.pt')
                 
@@ -109,23 +112,28 @@ class Trainer(object):
                 break
 
                 
-    def self_train(self, labeled_dataset, unlabeled_dataset, confidence_threshold=0.8):
+    def self_train(self, labeled_dataset, unlabeled_dataset, confidence_threshold=0.5):
         best_accuracy = -1
         min_dev_loss = 987654321
         
-        for outer_epoch in range(self.config.outer_epochs):
+        for outer_epoch in range(self.config.epochs):
             # pseudo-labeling
             new_dataset = self.pseudo_labeling(unlabeled_dataset, confidence_threshold)
             
             # update dataset (remove pseudo-labeled from unlabeled dataset and add them into labeled dataset)
             labeled_dataset, unlabeled_dataset = self.update_dataset(labeled_dataset, unlabeled_dataset, new_dataset)
-            
+
+            #TODO:
+            #Here we can add the data aug part with a ratio (does not need to augment the entire dataset since it is time-consuming)
+            #Look at constant.py, set noise_injection == True to decide whether to use data aug and if yes, what is the ratio
+            #After generate the augmented data, store it seperately and only use it for the belowed student model training, do NOT overwrite the original "labeled_dataset"
+
             self.train_loader = DataLoader(labeled_dataset, **self.config.train_params)
             self.early_stopping = EarlyStopping(patience=3, verbose=True)
             
             
             # retrain model with labeled data + pseudo-labeled data
-            for inner_epoch in range(self.config.inner_epochs):
+            for inner_epoch in range(self.config.epochs):
                 print('outer_epoch {} inner_epoch {}'.format(outer_epoch, inner_epoch))
                 self.train_epoch(inner_epoch)
                 dev_loss, dev_acc = self.evaluator.evaluate(self.model, self.valid_loader)
@@ -133,7 +141,6 @@ class Trainer(object):
                 
                 if dev_loss < min_dev_loss:
                     min_dev_loss = dev_loss
-                    print("Saving..")
                     torch.save({'model_state_dict':self.model.state_dict(),
                                 'optimizer_state_dict':self.optimizer.state_dict(), 'epoch':inner_epoch}, self.ssl_path +'/checkpoint.pt')
                 
@@ -155,22 +162,21 @@ class Trainer(object):
         new_dataset = {label:[] for label in range(self.config.class_num)}
         
         with torch.no_grad():
-            print("Starting pseudo labeling")
-            for _, batch in tqdm(enumerate(unlabeled_loader)):
+            for _, batch in enumerate(unlabeled_loader):
                 ids = batch['input_ids'].to(self.device, dtype=torch.long)
                 attention_mask = batch['attention_mask'].to(self.device, dtype=torch.long)
                 token_type_ids = batch['token_type_ids'].to(self.device, dtype=torch.long)
-                targets = batch['labels'].to(self.device, dtype=torch.long)
+                targets = batch['labels'].to(self.device, dtype=torch.float)
                 
-                outputs = self.model(ids, attention_mask, token_type_ids, labels=targets)
-                loss, logits = outputs[0], outputs[1]
-                confidences = torch.softmax(logits, dim=-1)
+                outputs = self.model(ids, attention_mask, token_type_ids)
+                loss = kd_loss(outputs,targets,self.config.kd_alpha,self.config.Temp)
+                confidences = torch.softmax(outputs.data, dim=-1)
                 big_val, big_idx = torch.max(confidences.data, dim=-1)
 
-                for text_id, label, conf_val, target in zip(ids, big_idx, big_val, targets):
-                    pred_label, conf_val, target = label.item(), conf_val.item(), target.item()
+                for text_id, label, conf_val, soft_pred, target in zip(ids, big_idx, big_val, confidences.data, targets):
+                    pred_label, conf_val, target = label.item(), conf_val.item(), target
                     if conf_val >= confidence_threshold:
-                        new_dataset[pred_label].append((text_id, pred_label, target))
+                        new_dataset[pred_label].append((text_id, pred_label, soft_pred, target))
         
         num_of_min_dataset = 987654321
         for label, dataset in new_dataset.items():
@@ -184,14 +190,7 @@ class Trainer(object):
         balanced_dataset = []
         for label in new_dataset.keys():
             balanced_dataset.extend(new_dataset[label][:num_of_min_dataset])
-        
-        for data in balanced_dataset:
-            text_id, pred_label, target = data[0], data[1], data[2]
-            if pred_label == target:
-                correct+=1
-            total+=1
-            
-        print(' pseduo-label {}'.format(total))
+
         return balanced_dataset
 
     
@@ -203,7 +202,7 @@ class Trainer(object):
         new_labels = []
         for idx in range(len(new_dataset)):
             text_id = new_dataset[idx][0]
-            pred_label = new_dataset[idx][1]
+            pred_label = new_dataset[idx][2]
             decoded_text = self.tokenizer.decode(text_id)
             decoded_text = decoded_text.replace("[CLS]", "").replace("[SEP]","").replace("[PAD]","").strip()
             new_texts.append(decoded_text)
@@ -242,7 +241,7 @@ class Trainer(object):
         labels = []
         for idx in range(len(dataset)):
             text_id = dataset[idx]['input_ids']
-            label = dataset[idx]['labels'].item()
+            label = dataset[idx]['labels']
             decoded_text = self.tokenizer.decode(text_id)
             decoded_text = decoded_text.replace("[CLS]", "").replace("[SEP]","").replace("[PAD]","").strip()
             decoded_texts.append(decoded_text)

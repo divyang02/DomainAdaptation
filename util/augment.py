@@ -7,7 +7,6 @@ import os
 import re
 import pickle
 
-# Load translation model
 en2ru = torch.hub.load('pytorch/fairseq', 'transformer.wmt19.en-ru.single_model', tokenizer='moses', bpe='fastbpe').to('cuda')
 ru2en = torch.hub.load('pytorch/fairseq', 'transformer.wmt19.ru-en.single_model', tokenizer='moses', bpe='fastbpe').to('cuda')
 

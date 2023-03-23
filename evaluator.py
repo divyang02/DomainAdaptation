@@ -1,14 +1,17 @@
 from __future__ import print_function, division
 import constant as config
 import torch
+from util.criterion import kd_loss
 import torchtext
 
 
 class Evaluator(object):
     """ Class to evaluate models with given datasets.
     """
-    def __init__(self, loss, batch_size=64):
-        self.loss = loss
+    def __init__(self, batch_size, alpha, temp):
+        # self.loss = loss
+        self.alpha = alpha
+        self.temp = temp
         self.batch_size = batch_size
         
     def calculate_accu(self, big_idx, targets):
@@ -23,7 +26,7 @@ class Evaluator(object):
         Returns:
             loss (float): loss of the given model on the given dataset
         """
-        loss = self.loss
+        # loss = self.loss
         model.eval()
         device = config.device
         
@@ -37,27 +40,29 @@ class Evaluator(object):
                 ids = batch['input_ids'].to(device, dtype=torch.long)
                 attention_mask = batch['attention_mask'].to(device, dtype=torch.long)
                 token_type_ids = batch['token_type_ids'].to(device, dtype=torch.long)
-                targets = batch['labels'].to(device, dtype=torch.long)
-                
-                outputs = model(ids, attention_mask, token_type_ids, labels=targets)
-                loss, logits = outputs[0], outputs[1]
+                targets = batch['labels'].to(device, dtype=torch.float)
+                outputs = model(ids, attention_mask, token_type_ids)
+                loss = kd_loss(outputs,targets,self.alpha,self.temp)
+                # outputs = model(ids, attention_mask, token_type_ids, labels=targets)
+                # loss, logits = outputs[0], outputs[1]
                 
                 eval_loss += loss.item()
-                big_val, big_idx = torch.max(logits.data, dim=-1)
-                n_correct += self.calculate_accu(big_idx, targets)
+                big_val, big_idx = torch.max(outputs.data, dim=-1)
+                _, big_idx_target = torch.max(targets.data, dim=-1)
+                n_correct += self.calculate_accu(big_idx, big_idx_target)
                 
                 nb_eval_steps += 1
-                nb_eval_examples += targets.size(0)
+                nb_eval_examples += big_idx_target.size(0)
                 
-                # if _ % 1000 == 0:
-                #     loss_step = eval_loss / nb_eval_steps
-                #     accu_step = (n_correct*100)/nb_eval_examples
-                #     if is_test == True:
-                #         print(f"Test Loss per 1000 steps: {loss_step}")
-                #         print(f"Test Accuracy per 1000 steps: {accu_step}")
-                #     else:
-                #         print(f"Validation Loss per 1000 steps: {loss_step}")
-                #         print(f"Validation Accuracy per 1000 steps: {accu_step}")
+                if _ % 1000 == 0:
+                    loss_step = eval_loss / nb_eval_steps
+                    accu_step = (n_correct*100)/nb_eval_examples
+                    if is_test == True:
+                        print(f"Test Loss per 1000 steps: {loss_step}")
+                        print(f"Test Accuracy per 1000 steps: {accu_step}")
+                    else:
+                        print(f"Validation Loss per 1000 steps: {loss_step}")
+                        print(f"Validation Accuracy per 1000 steps: {accu_step}")
             
         epoch_loss = eval_loss / nb_eval_steps
         epoch_accu = (n_correct*100) / nb_eval_examples
