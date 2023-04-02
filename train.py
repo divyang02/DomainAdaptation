@@ -8,32 +8,54 @@ from torch.utils.data import DataLoader
 from trainer import Trainer
 # from util.augment import *
 import numpy as np
-import torch.nn.functional as F
+import torch.nn.functional as F 
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from collections import Counter
+import os
 
 # Define the dataset path and class number
 # TODO: change here to load different datasets.
-Labeled_dataset_path = "./Dataset/Sample_dataset/Val_small.csv"
-Unlabeled_dataset_path = "./Dataset/Sample_dataset/Unlabeled_small.csv"
-save_path = "./save"
+# Define the dataset path and class number
+labeled_dataset_path = "./Dataset/Labeled_new.csv"
+test_dataset_path = "./Dataset/Val.csv"
+unlabeled_dataset_path = "./Dataset/Unlabeled.csv"
+save_path = "./exaperimental_results/"
+
+if not os.path.isdir(save_path):
+    os.mkdir(save_path)
 
 # Load the dataset
-train_df = pd.read_csv(Labeled_dataset_path)
-unlabeled_df = pd.read_csv(Unlabeled_dataset_path)
-unlabeled_texts, unlabeled_labels = unlabeled_df["comments"].tolist(),[0]*len(unlabeled_df["comments"])
+test_df = pd.read_csv(test_dataset_path)
+labeled_df = pd.read_csv(labeled_dataset_path)
+unlabled_df = pd.read_csv(unlabeled_dataset_path)
 
-# Modifiy the labels from -1 to 0 since in bert model, target should contain indices in the range [0, nb_classes-1].
-train_df["Helpful"] = train_df["Helpful"].apply(lambda x: 1 if x == 1 else 0)
+test_df = test_df[['comments', 'Helpful']]
+labeled_df = labeled_df[['comments', 'Helpful']]
+unlabled_df = unlabled_df[['comments']]
+
+test_df["Helpful"] = test_df["Helpful"].apply(lambda x: 1 if x == 1 else 0)
+
+#Make it balanced if needed
+# labeled_df = labeled_df.groupby('Helpful', as_index=False).apply(lambda x: x.sample(7000))
+
+print("Count of labelled data - ", labeled_df['Helpful'].value_counts())
+print("Count of test data - ", test_df['Helpful'].value_counts())
+input("Press Y to continue, or ctrl+c to exit: ")
+
+# # Load the dataset
+# train_df = pd.read_csv(Labeled_dataset_path)
+# unlabeled_df = pd.read_csv(Unlabeled_dataset_path)
+# unlabeled_texts, unlabeled_labels = unlabeled_df["comments"].tolist(),[0]*len(unlabeled_df["comments"])
+
+# # Modifiy the labels from -1 to 0 since in bert model, target should contain indices in the range [0, nb_classes-1].
+# train_df["Helpful"] = train_df["Helpful"].apply(lambda x: 1 if x == 1 else 0)
+
 
 # Define the training and validation sets
-train_texts, train_labels = train_df["comments"].tolist(), train_df["Helpful"].tolist()
-
-labeled_texts, remain_texts, labeled_labels, remain_labels = train_test_split(train_texts, train_labels, test_size=0.4,
-                                                                              random_state=2023)
-dev_texts, test_texts, dev_labels, test_labels = train_test_split(remain_texts, remain_labels, test_size=0.5,
-                                                                  random_state=2023)
+labeled_texts, labeled_labels = labeled_df["comments"].tolist(), labeled_df["Helpful"].tolist()
+test_texts, test_labels = test_df["comments"].tolist(), test_df["Helpful"].tolist()
+unlabeled_texts, unlabeled_labels = unlabled_df["comments"].tolist(),[0]*len(unlabled_df["comments"])
 
 # Tokenizing
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
@@ -41,8 +63,9 @@ labeled_encodings = tokenizer(labeled_texts, truncation=True, padding=True)
 labeled_dataset = Dataset(labeled_encodings, labeled_labels)
 labeled_dataset.labels = F.one_hot(torch.tensor(labeled_dataset.labels),num_classes=2)
 
-dev_encodings = tokenizer(dev_texts, truncation=True, padding=True)
-dev_dataset = Dataset(dev_encodings, dev_labels)
+#We don't have dev and test split for now
+dev_encodings = tokenizer(test_texts, truncation=True, padding=True)
+dev_dataset = Dataset(dev_encodings, test_labels)
 dev_dataset.labels = F.one_hot(torch.tensor(dev_dataset.labels),num_classes=2)
 
 test_encodings = tokenizer(test_texts, truncation=True, padding=True)
@@ -62,7 +85,13 @@ model = BERTClass(n_classes=2,dropout_rate=config.dropout_rate)
 # loss_function = torch.nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=2e-5)  # or AdamW
 
-trainer = Trainer(config, model, optimizer, save_path, dev_dataset, test_dataset)
+#For baseline we can use alpha=0 and temp=1 as it translates to cross entropy loss
+alpha = 0
+temp = 1
+if config.use_kd:
+    alpha = config.kd_alpha
+    temp = config.Temp
+trainer = Trainer(config, model, optimizer, save_path, dev_dataset=test_dataset, test_dataset=test_dataset, alpha=alpha, temp=temp)
 
 #Initial training
 trainer.initial_train(labeled_dataset)

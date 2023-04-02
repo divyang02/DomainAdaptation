@@ -9,13 +9,15 @@ from util.criterion import kd_loss
 
 
 class Trainer(object):
-    def __init__(self, config, model, optimizer, save_path, dev_dataset, test_dataset):
+    def __init__(self, config, model, optimizer, save_path, dev_dataset, test_dataset, alpha=0, temp=1):
         self.config = config
         self.optimizer = optimizer
         self.device = self.config.device
+        self.alpha = alpha
+        self.temp = temp
 
         # self.loss = criterion.to(self.device)
-        self.evaluator = Evaluator(batch_size=self.config.test_batch_size, alpha=self.config.kd_alpha, temp=self.config.Temp)
+        self.evaluator = Evaluator(batch_size=self.config.test_batch_size, alpha=self.alpha, temp=self.temp)
         self.model = model.to(self.device)
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
@@ -27,8 +29,8 @@ class Trainer(object):
         self.early_stopping = None
         
         self.save_path = save_path
-        self.sup_path = self.save_path +'/sup'
-        self.ssl_path = self.save_path +'/ssl'
+        self.sup_path = self.save_path +'/supervised'
+        self.ssl_path = self.save_path +'/semisupervised'
         
         if not os.path.isabs(self.sup_path):
             self.sup_path = os.path.join(os.getcwd(), self.sup_path)
@@ -58,11 +60,10 @@ class Trainer(object):
             ids = batch['input_ids'].to(self.device, dtype=torch.long)
             attention_mask = batch['attention_mask'].to(self.device, dtype=torch.long)
             token_type_ids = batch['token_type_ids'].to(self.device, dtype=torch.long)
-            # targets = batch['labels'].to(self.device, dtype=torch.long)
+
             targets = batch['labels'].to(self.device, dtype=torch.float)
             outputs = self.model(ids, attention_mask, token_type_ids)
-            loss = kd_loss(outputs,targets,self.config.kd_alpha,self.config.Temp)
-            # loss, logits = outputs[0], outputs[1]
+            loss = kd_loss(outputs,targets,self.alpha,self.temp)
             
             tr_loss += loss.item()
             scores = torch.softmax(outputs.data, dim=-1)
@@ -112,11 +113,11 @@ class Trainer(object):
                 break
 
                 
-    def self_train(self, labeled_dataset, unlabeled_dataset, confidence_threshold=0.5):
+    def self_train(self, labeled_dataset, unlabeled_dataset, confidence_threshold=0.8):
         best_accuracy = -1
         min_dev_loss = 987654321
         
-        for outer_epoch in range(self.config.epochs):
+        for outer_epoch in range(self.config.outer_epochs):
             # pseudo-labeling
             new_dataset = self.pseudo_labeling(unlabeled_dataset, confidence_threshold)
             
@@ -135,7 +136,7 @@ class Trainer(object):
             #We can do "del self.model" then initialize self.model = LARGER_BERT and so on
 
             # retrain model with labeled data + pseudo-labeled data
-            for inner_epoch in range(self.config.epochs):
+            for inner_epoch in range(self.config.inner_epochs):
                 print('outer_epoch {} inner_epoch {}'.format(outer_epoch, inner_epoch))
                 self.train_epoch(inner_epoch)
                 dev_loss, dev_acc = self.evaluator.evaluate(self.model, self.valid_loader)
@@ -145,6 +146,7 @@ class Trainer(object):
                     min_dev_loss = dev_loss
                     torch.save({'model_state_dict':self.model.state_dict(),
                                 'optimizer_state_dict':self.optimizer.state_dict(), 'epoch':inner_epoch}, self.ssl_path +'/checkpoint.pt')
+                    print("Saving..")
                 
                 if inner_epoch % 2 == 0:
                     test_loss, test_acc = self.evaluator.evaluate(self.model, self.test_loader, is_test=True)
@@ -164,6 +166,7 @@ class Trainer(object):
         new_dataset = {label:[] for label in range(self.config.class_num)}
         
         with torch.no_grad():
+            print("Starting pseudo labeling")
             for _, batch in enumerate(unlabeled_loader):
                 ids = batch['input_ids'].to(self.device, dtype=torch.long)
                 attention_mask = batch['attention_mask'].to(self.device, dtype=torch.long)
@@ -188,7 +191,6 @@ class Trainer(object):
         for label in new_dataset.keys():
             new_dataset[label] = new_dataset[label][:num_of_min_dataset]
             
-        total, correct = 0, 0
         balanced_dataset = []
         for label in new_dataset.keys():
             balanced_dataset.extend(new_dataset[label][:num_of_min_dataset])
@@ -235,6 +237,7 @@ class Trainer(object):
     def encode_dataset(self, texts, labels):
         encodings = self.tokenizer(texts, truncation=True, padding=True)
         dataset = Dataset(encodings, labels)
+        labels = torch.tensor(labels)
         return dataset
     
     

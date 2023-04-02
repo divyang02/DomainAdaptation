@@ -1,19 +1,21 @@
 import torch
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 learning_rate = 2e-5
-epochs = 3
-# train_batch_size = 64
-# valid_batch_size = 64
-# test_batch_size = 128
-# unlabeled_batch_size = 128
+epochs = 5  #initial train epochs
+outer_epochs = 10 #How many times we perform the pseudo labeling
+inner_epochs = 3 #Epochs for each pseudo labeling iteration
+train_batch_size = 16
+valid_batch_size = 16
+test_batch_size = 16
+unlabeled_batch_size = 16
 
-train_batch_size = 1
-valid_batch_size = 1
-test_batch_size = 1
-unlabeled_batch_size = 2
-dropout_rate = 0.3
+#Whether to use KD or not
+use_kd = False
+#Other KD params, these won't be used if use_kd = False
 Temp = 1
 kd_alpha = 0.5
+
+dropout_rate = 0.3
 class_num = 2
 bidirectional = True
 
