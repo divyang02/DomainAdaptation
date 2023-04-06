@@ -6,6 +6,8 @@ from util.early_stopping import EarlyStopping
 from transformers import BertTokenizer, BertForSequenceClassification
 from util.dataset import Dataset
 from util.criterion import kd_loss
+import constant as config
+import torch.nn.functional as F 
 
 
 class Trainer(object):
@@ -180,6 +182,8 @@ class Trainer(object):
 
                 for text_id, label, conf_val, soft_pred, target in zip(ids, big_idx, big_val, confidences.data, targets):
                     pred_label, conf_val, target = label.item(), conf_val.item(), target
+                    if not config.use_kd:
+                        soft_pred = F.one_hot(torch.argmax(soft_pred), num_classes=2)
                     if conf_val >= confidence_threshold:
                         new_dataset[pred_label].append((text_id, pred_label, soft_pred, target))
         
@@ -236,6 +240,7 @@ class Trainer(object):
         
     def encode_dataset(self, texts, labels):
         encodings = self.tokenizer(texts, truncation=True, padding=True)
+        labels = [label.tolist() for label in labels]
         dataset = Dataset(encodings, labels)
         labels = torch.tensor(labels)
         return dataset
