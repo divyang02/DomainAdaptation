@@ -6,8 +6,7 @@ from util.early_stopping import EarlyStopping
 from transformers import BertTokenizer, BertForSequenceClassification
 from util.dataset import Dataset
 from util.criterion import kd_loss
-import constant as config
-import torch.nn.functional as F 
+import constant
 
 
 class Trainer(object):
@@ -118,18 +117,91 @@ class Trainer(object):
     def self_train(self, labeled_dataset, unlabeled_dataset, confidence_threshold=0.8):
         best_accuracy = -1
         min_dev_loss = 987654321
+
+        en2ru = torch.hub.load('pytorch/fairseq', 'transformer.wmt19.en-ru.single_model', tokenizer='moses', bpe='fastbpe').to('cuda')
+        ru2en = torch.hub.load('pytorch/fairseq', 'transformer.wmt19.ru-en.single_model', tokenizer='moses', bpe='fastbpe').to('cuda')
+
+        en2de = torch.hub.load('pytorch/fairseq', 'transformer.wmt19.en-de.single_model', tokenizer='moses', bpe='fastbpe').to('cuda')
+        de2en = torch.hub.load('pytorch/fairseq', 'transformer.wmt19.de-en.single_model', tokenizer='moses', bpe='fastbpe').to('cuda')
         
         for outer_epoch in range(self.config.outer_epochs):
-            # pseudo-labeling
-            new_dataset = self.pseudo_labeling(unlabeled_dataset, confidence_threshold)
-            
-            # update dataset (remove pseudo-labeled from unlabeled dataset and add them into labeled dataset)
-            labeled_dataset, unlabeled_dataset = self.update_dataset(labeled_dataset, unlabeled_dataset, new_dataset)
+
 
             #TODO:
             #Here we can add the data aug part with a ratio (does not need to augment the entire dataset since it is time-consuming)
             #Look at constant.py, set noise_injection == True to decide whether to use data aug and if yes, what is the ratio
             #After generate the augmented data, store it seperately and only use it for the belowed student model training, do NOT overwrite the original "labeled_dataset"
+
+            # pseudo-labeling
+            new_dataset = self.pseudo_labeling(unlabeled_dataset, confidence_threshold)
+
+            if constant.noise_injection:
+
+                #new_dataset_text, new_dataset_labels = self.decode_dataset(new_dataset)
+
+                new_texts = []
+                new_labels = []
+                for idx in range(len(new_dataset)):
+                    text_id = new_dataset[idx][0]
+                    pred_label = new_dataset[idx][2]
+                    decoded_text = self.tokenizer.decode(text_id)
+                    decoded_text = decoded_text.replace("[CLS]", "").replace("[SEP]","").replace("[PAD]","").strip()
+                    new_texts.append(decoded_text)
+                    new_labels.append(pred_label)
+                new_dataset_text = new_texts
+                new_dataset_labels = new_labels
+
+                
+
+                def back_translate(texts, labels=None):
+                    augmented_texts = []
+                    augmented_labels = []
+                    for text, label in zip(texts, labels):
+                        #print(text)
+
+                        #en-ru-en
+                        augmented_texts.append(back_translate_ru(en2ru, ru2en, text))
+                        #print(back_translate_ru(en2ru, ru2en, text))
+                        augmented_labels.append(label)
+                        #print(back_translate_de(en2de, de2en, text))
+
+                        #en-de-en
+                        augmented_texts.append(back_translate_de(en2de, de2en, text))
+                        augmented_labels.append(label)
+                        #print()
+                    return augmented_texts, augmented_labels
+                
+                def back_translate_ru(en2ru, ru2en, text):
+                    ru = en2ru.translate(text)
+                    return ru2en.translate(ru)
+
+                def back_translate_de(en2de, de2en, text):
+                    de = en2de.translate(text)
+                    return de2en.translate(de)
+
+                augmented_labeled_texts = []
+                augmented_labels = []
+
+                # selection based on ratio
+                num_samples = round(len(new_dataset_text) * constant.noise_injection_rate)
+                selected_new_dataset_text = new_dataset_text[:num_samples]
+                selected_new_dataset_labels = new_dataset_labels[:num_samples]
+
+                # labeled dataset augmentation
+                #texts_l, labels = back_translate(selected_new_dataset_text, selected_new_dataset_labels['is_helpful?'])
+                texts_l, labels = back_translate(selected_new_dataset_text, selected_new_dataset_labels)
+                augmented_labeled_texts.extend(texts_l)
+                augmented_labels.extend(labels)
+
+                # data --> tensors
+                new_aug_dataset = self.encode_dataset(augmented_labeled_texts, augmented_labels)
+                
+            
+            # update dataset (remove pseudo-labeled from unlabeled dataset and add them into labeled dataset)
+            labeled_dataset, unlabeled_dataset = self.update_dataset(labeled_dataset, unlabeled_dataset, new_dataset)
+            labeled_dataset, unlabeled_dataset = self.update_dataset(labeled_dataset, unlabeled_dataset, new_aug_dataset, augmented_labeled_texts, augmented_labels)
+
+            ######
 
             self.train_loader = DataLoader(labeled_dataset, **self.config.train_params)
             self.early_stopping = EarlyStopping(patience=3, verbose=True)
@@ -182,8 +254,6 @@ class Trainer(object):
 
                 for text_id, label, conf_val, soft_pred, target in zip(ids, big_idx, big_val, confidences.data, targets):
                     pred_label, conf_val, target = label.item(), conf_val.item(), target
-                    if not config.use_kd:
-                        soft_pred = F.one_hot(torch.argmax(soft_pred), num_classes=2)
                     if conf_val >= confidence_threshold:
                         new_dataset[pred_label].append((text_id, pred_label, soft_pred, target))
         
@@ -202,20 +272,27 @@ class Trainer(object):
         return balanced_dataset
 
     
-    def update_dataset(self, labeled_dataset, unlabeled_dataset, new_dataset):
+    def update_dataset(self, labeled_dataset, unlabeled_dataset, new_dataset, n_texts = None, n_labels=None):
         '''
         @param new_dataset type list(tuple(text_ids, pred_label, target_label))
         '''
+        # decode new_dataset
         new_texts = []
         new_labels = []
-        for idx in range(len(new_dataset)):
-            text_id = new_dataset[idx][0]
-            pred_label = new_dataset[idx][2]
-            decoded_text = self.tokenizer.decode(text_id)
-            decoded_text = decoded_text.replace("[CLS]", "").replace("[SEP]","").replace("[PAD]","").strip()
-            new_texts.append(decoded_text)
-            new_labels.append(pred_label)
+
+        if n_labels and n_texts:
+          new_texts = n_texts
+          new_labels = n_labels
+        else:
+          for idx in range(len(new_dataset)):
+              text_id = new_dataset[idx][0]
+              pred_label = new_dataset[idx][2]
+              decoded_text = self.tokenizer.decode(text_id)
+              decoded_text = decoded_text.replace("[CLS]", "").replace("[SEP]","").replace("[PAD]","").strip()
+              new_texts.append(decoded_text)
+              new_labels.append(pred_label)
         
+        # decode labeled and unlabeled dataset
         labeled_texts, labeled_labels = self.decode_dataset(labeled_dataset)
         unlabeled_texts, unlabeled_labels = self.decode_dataset(unlabeled_dataset)
         print('labeled {} unlabeled {}'.format(len(labeled_texts), len(unlabeled_texts)))
@@ -227,9 +304,13 @@ class Trainer(object):
         
         # remove pseudo-labeled from unlabeled dataset
         for text in new_texts:
+          try:
             idx = unlabeled_texts.index(text)
             unlabeled_texts.pop(idx)
             unlabeled_labels.pop(idx)
+          except:
+            continue
+          
         print('After updated -> labeled {} unlabeled {}'.format(len(labeled_texts), len(unlabeled_texts)))
         
         # encodings -> make dataset
